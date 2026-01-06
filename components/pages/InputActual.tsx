@@ -1,0 +1,259 @@
+
+import React, { useState, useEffect, useMemo } from 'react';
+import { StorageService } from '../../services/storageService';
+import { useAuth } from '../../contexts/AuthContext';
+import { useDashboard } from '../../contexts/DashboardContext';
+import { ProductionEntry } from '../../types';
+import { AlertCircle, CheckCircle2, Palmtree, ShieldCheck } from 'lucide-react';
+import { getTodayISO } from '../../utils/dateUtils';
+
+export const InputActual: React.FC = () => {
+  const { user } = useAuth();
+  const { triggerRefresh } = useDashboard();
+  const [date, setDate] = useState(getTodayISO());
+  
+  const [pendingPlans, setPendingPlans] = useState<ProductionEntry[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState<string>('');
+  
+  const [formData, setFormData] = useState({
+    actualQty: '',
+    manpower: '',
+    batchNo: '',
+    remark: ''
+  });
+
+  const [msg, setMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+
+  const offDays = useMemo(() => StorageService.getOffDays(), []);
+  const currentOffDay = useMemo(() => offDays.find(od => od.date === date), [date, offDays]);
+
+  useEffect(() => {
+    if (currentOffDay) {
+        window.dispatchEvent(new CustomEvent('app-notification', { 
+            detail: { message: `HOLIDAY DETECTED: ${currentOffDay.description}`, type: 'info' } 
+        }));
+    }
+  }, [currentOffDay]);
+
+  useEffect(() => {
+    const all = StorageService.getProductionData();
+    let forDate = all.filter(p => p.date === date);
+
+    // DEPARTMENT FILTERING FOR OPERATORS
+    if (user?.role === 'operator' && user?.category) {
+        forDate = forDate.filter(p => p.category === user.category);
+    }
+
+    setPendingPlans(forDate);
+    setSelectedPlanId('');
+    setFormData({ actualQty: '', manpower: '', batchNo: '', remark: '' });
+  }, [date, user]);
+
+  const handleAutoBatch = () => {
+    const r = Math.floor(Math.random() * 10000);
+    const b = `B-${date.replace(/-/g, '')}-${r}`.toUpperCase();
+    setFormData(prev => ({ ...prev, batchNo: b }));
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (currentOffDay) {
+      setMsg({ type: 'error', text: 'Cannot enter data on an Off Day.' });
+      return;
+    }
+
+    if (!selectedPlanId) {
+      setMsg({ type: 'error', text: 'Please select a production plan to update.' });
+      return;
+    }
+
+    try {
+      const allData = StorageService.getProductionData();
+      const updatedData = allData.map(entry => {
+        if (entry.id === selectedPlanId) {
+          return {
+            ...entry,
+            actualQuantity: parseFloat(formData.actualQty),
+            manpower: parseFloat(formData.manpower),
+            batchNo: formData.batchNo.toUpperCase(),
+            remark: formData.remark.toUpperCase(),
+            lastUpdatedBy: user!.id,
+            updatedAt: new Date().toISOString()
+          };
+        }
+        return entry;
+      });
+
+      StorageService.saveProductionData(updatedData);
+      
+      const target = allData.find(e => e.id === selectedPlanId);
+      StorageService.addLog({
+        userId: user!.id,
+        userName: user!.name,
+        action: 'RECORD_ACTUAL',
+        details: `Updated actuals for ${target?.productName?.toUpperCase()} [${target?.category}]: ${formData.actualQty} units`
+      });
+
+      triggerRefresh();
+      setMsg({ type: 'success', text: 'Actual data updated successfully.' });
+      
+      window.dispatchEvent(new CustomEvent('app-notification', { 
+        detail: { message: 'ACTUAL PRODUCTION RECORDED', type: 'success' } 
+      }));
+
+      const forDate = updatedData.filter(p => p.date === date && (user?.role !== 'operator' || p.category === user?.category));
+      setPendingPlans(forDate);
+    } catch (err) {
+      setMsg({ type: 'error', text: 'Error saving data.' });
+    }
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-gray-100 dark:border-slate-700 p-8">
+        <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-bold text-gray-800 dark:text-white">Input Actual Production</h2>
+            {user?.role === 'operator' && user.category && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-800 rounded-full">
+                    <ShieldCheck className="w-4 h-4" />
+                    <span className="text-[10px] font-black uppercase tracking-widest">{user.category} Dept</span>
+                </div>
+            )}
+        </div>
+
+        {msg && (
+          <div className={`p-4 rounded-lg mb-6 flex items-center ${msg.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+            {msg.type === 'success' ? <CheckCircle2 className="w-5 h-5 mr-2" /> : <AlertCircle className="w-5 h-5 mr-2" />}
+            {msg.text}
+          </div>
+        )}
+
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Select Date</label>
+          <input 
+            type="date" 
+            className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-brand-500 dark:bg-slate-900 dark:text-white font-bold"
+            value={date}
+            onChange={e => setDate(e.target.value)}
+          />
+
+          {currentOffDay && (
+            <div className="mt-4 p-4 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-2xl flex items-center gap-4">
+              <div className="p-3 bg-amber-500 text-white rounded-xl shadow-lg shadow-amber-500/20">
+                <Palmtree className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest leading-none mb-1">System Restriction</p>
+                <p className="text-sm font-black text-slate-800 dark:text-amber-100">Public Holiday: {currentOffDay.description}</p>
+                <p className="text-[10px] font-bold text-amber-50 mt-1 uppercase">Production entry is disabled today</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {!currentOffDay && (
+          <>
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Select Job / Plan</label>
+              {pendingPlans.length === 0 ? (
+                <div className="text-sm text-gray-500 italic p-3 border rounded bg-gray-50 dark:bg-slate-900 dark:border-slate-700">No active plans found for your department on this date.</div>
+              ) : (
+                <div className="space-y-2 max-h-60 overflow-y-auto border border-gray-200 dark:border-slate-700 rounded-lg p-2">
+                  {pendingPlans.map(plan => (
+                    <div 
+                      key={plan.id}
+                      onClick={() => setSelectedPlanId(plan.id)}
+                      className={`p-3 rounded-md cursor-pointer border transition-colors ${
+                        selectedPlanId === plan.id 
+                          ? 'bg-brand-50 border-brand-500 ring-1 ring-brand-500 dark:bg-brand-900/20' 
+                          : 'bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700'
+                      }`}
+                    >
+                      <div className="flex justify-between items-center">
+                        <span className="font-semibold text-gray-800 dark:text-white uppercase">{plan.productName}</span>
+                        <span className="text-[10px] font-black uppercase bg-gray-100 dark:bg-slate-700 px-2 py-1 rounded text-gray-600 dark:text-gray-400">{plan.category}</span>
+                      </div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400 flex justify-between mt-1">
+                        <span>{plan.process}</span>
+                        <span>Plan: {plan.planQuantity} {plan.unit}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {selectedPlanId && (
+              <form onSubmit={handleSubmit} className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Actual Quantity</label>
+                    <input 
+                      type="number" 
+                      step="any"
+                      min="0"
+                      required
+                      className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-brand-500 dark:bg-slate-900 dark:text-white"
+                      value={formData.actualQty}
+                      onChange={e => setFormData({...formData, actualQty: e.target.value})}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Manpower</label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      min="0"
+                      required
+                      className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-brand-500 dark:bg-slate-900 dark:text-white"
+                      value={formData.manpower}
+                      onChange={e => setFormData({...formData, manpower: e.target.value})}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Batch Number</label>
+                  <div className="flex space-x-2">
+                    <input 
+                      type="text" 
+                      required
+                      className="flex-1 px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-brand-500 dark:bg-slate-900 dark:text-white uppercase"
+                      value={formData.batchNo}
+                      onChange={e => setFormData({...formData, batchNo: e.target.value.toUpperCase()})}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAutoBatch}
+                      className="px-4 py-2 bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 font-medium rounded-lg hover:bg-gray-200 dark:hover:bg-slate-600"
+                    >
+                      Generate
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Remarks</label>
+                  <textarea 
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-brand-500 dark:bg-slate-900 dark:text-white h-24 resize-none uppercase"
+                    placeholder="Operational notes..."
+                    value={formData.remark}
+                    onChange={e => setFormData({...formData, remark: e.target.value.toUpperCase()})}
+                  />
+                </div>
+
+                <button 
+                  type="submit"
+                  className="w-full bg-brand-600 text-white font-semibold py-2.5 rounded-lg hover:bg-brand-700 transition-colors shadow-sm"
+                >
+                  Update Production Data
+                </button>
+              </form>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
