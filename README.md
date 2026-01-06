@@ -1,0 +1,2 @@
+# HALAGEL-MANUFACTURING-SYSTEMS-
+halagel Dashboard
